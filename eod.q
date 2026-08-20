@@ -26,3 +26,20 @@
   trade::0#trade;
   -1 "EOD: RDB trade table cleared for next session.";
   }
+
+/ ---- scheduled trigger ----
+/ fires .eod.run[] automatically once per day, shortly after midnight,
+/ instead of requiring a manual .eod.run[] call.
+.eod.triggerTime:00:00:01.000
+.eod.lastRunDate:0Nd
+
+.eod.checkSchedule:{
+  if[(.z.t>.eod.triggerTime) and (.z.d<>.eod.lastRunDate) and (`trade in key `.) and (0<count trade);
+    -1 "Scheduled EOD firing for ",string .z.d;
+    .eod.run[];
+    .eod.lastRunDate::.z.d;
+    ];
+  }
+/ NOTE: no .z.ts / \t timer here anymore - rdb.q owns a single combined
+/ timer that calls both .eod.checkSchedule[] and its own connection-health
+/ check, since .z.ts is a single callback slot and can't be set twice.

@@ -15,6 +15,10 @@
 / actually want to catch.
 / Size is unaffected by this - it doesn't have the same drift/trend problem,
 / so it's still scored as LOG(size) percentile rank directly.
+/ .a.replaying is set true while rebuilding state from a log replay (on
+/ startup or after a reconnect) - the rolling windows still get rebuilt
+/ correctly, but we don't re-flag/re-print/re-insert historical anomalies
+/ that were already handled before a disconnect.
 
 .a.N:100            / rolling window size per symbol
 .a.minN:20          / minimum history before we start flagging
@@ -26,6 +30,7 @@
 .a.rWin:()!()       / sym -> float list of recent RAW returns (used only to compute local short-term momentum)
 .a.drWin:()!()      / sym -> float list of recent DETRENDED return residuals (what we actually rank)
 .a.lvWin:()!()      / sym -> float list of recent LOG(size) values
+.a.replaying:0b     / true while rebuilding state from a log replay - suppresses flagging side-effects
 
 trade:([] time:`timestamp$(); sym:`symbol$(); price:`float$(); size:`float$())
 anomalies:([] time:`timestamp$(); sym:`symbol$(); price:`float$(); size:`float$(); priceRank:`float$(); sizeRank:`float$(); reason:())
@@ -50,12 +55,14 @@ allScores:([] time:`timestamp$(); sym:`symbol$(); priceRank:`float$(); sizeRank:
   pr:0n; vr:0n; reasons:`symbol$();
   if[(not null dr) and count[drh]>=.a.minN; pr:.a.pctrank[drh;dr]];
   if[(v>0) and count[lvh]>=.a.minN; vr:.a.pctrank[lvh;lv]];
-  `allScores insert (tm;s;pr;vr);
-  if[(not null pr) and ((pr<=.a.lowPct) or (pr>=.a.hiPct)); reasons,:`price];
-  if[(not null vr) and ((vr<=.a.lowPct) or (vr>=.a.hiPct)); reasons,:`size];
-  if[count reasons;
-    `anomalies insert (tm;s;p;v;pr;vr;reasons);
-    -1 "ANOMALY ",string[s]," price=",string[p]," size=",string[v]," priceRank=",(string pr)," sizeRank=",(string vr)," reason=",", " sv string reasons;
+  if[not .a.replaying;
+    `allScores insert (tm;s;pr;vr);
+    if[(not null pr) and ((pr<=.a.lowPct) or (pr>=.a.hiPct)); reasons,:`price];
+    if[(not null vr) and ((vr<=.a.lowPct) or (vr>=.a.hiPct)); reasons,:`size];
+    if[count reasons;
+      `anomalies insert (tm;s;p;v;pr;vr;reasons);
+      -1 "ANOMALY ",string[s]," price=",string[p]," size=",string[v]," priceRank=",(string pr)," sizeRank=",(string vr)," reason=",", " sv string reasons;
+      ];
     ];
   if[not null r; .a.rWin[s]::neg[.a.N] sublist rh,r];
   if[not null dr; .a.drWin[s]::neg[.a.N] sublist drh,dr];
@@ -71,7 +78,42 @@ upd:{[t;data]
   .a.proc each trade idx;
   }
 
-h:hopen `::5010
-resp:h (`.u.sub;`trade;`)
+/ ---- connection state ----
+.a.h:0Ni
 
--1 "anomaly detector up.";
+/ ---- (re)connect: open handle, subscribe, replay today's log to rebuild the
+/ rolling windows exactly - quietly (no re-flagging historical anomalies) ----
+.a.connect:{
+  h2:@[hopen;`::5010;{-1 "ANOM: connect failed - ",x; 0Ni}];
+  if[null h2; :(::)];
+  .a.h::h2;
+  r:@[h2;(`.u.sub;`trade;`);{-1 "ANOM: subscribe failed - ",x; `FAIL}];
+  if[r~`FAIL; .a.h::0Ni; :(::)];
+  trade::0#trade;
+  .a.lastPrice::()!();
+  .a.rWin::()!();
+  .a.drWin::()!();
+  .a.lvWin::()!();
+  .a.replaying::1b;
+  logfile:hsym `$"tplogs/",string .z.d;
+  if[type key logfile; -11!logfile];
+  .a.replaying::0b;
+  -1 "ANOM (re)connected. rows after replay: ",string[count trade],", windows rebuilt quietly.";
+  }
+
+/ ---- periodic check: is the tickerplant connection alive? if not, reconnect ----
+.a.checkConn:{
+  if[null .a.h; .a.connect[]; :(::)];
+  ok:@[{.a.h "1"};(::);{0b}];
+  if[not (1~ok);
+    -1 "ANOM: tickerplant connection lost, reconnecting...";
+    .a.h::0Ni;
+    .a.connect[];
+    ];
+  }
+
+.z.ts:{.a.checkConn[]}
+\t 5000
+
+/ ---- initial connection ----
+.a.connect[]

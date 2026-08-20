@@ -14,6 +14,8 @@ on its own.
 import pykx as kx
 import pandas as pd
 import numpy as np
+import time
+from datetime import datetime, timezone
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 
@@ -95,5 +97,25 @@ def main():
         print(sample[['time', 'sym', 'price', 'size', 'ret', 'log_size']].to_string(index=False))
 
 
+def run_scheduled(interval_seconds):
+    """Run the comparison repeatedly, sleeping between runs, instead of once."""
+    print(f"Running every {interval_seconds}s. Ctrl+C to stop.\n")
+    try:
+        while True:
+            print(f"=== Run at {datetime.now(timezone.utc).isoformat()} ===")
+            try:
+                main()
+            except Exception as e:
+                print(f"Run failed: {e}")
+            print(f"\nSleeping {interval_seconds}s...\n")
+            time.sleep(interval_seconds)
+    except KeyboardInterrupt:
+        print("\nStopped by user.")
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    if "--once" in sys.argv:
+        main()
+    else:
+        run_scheduled(interval_seconds=300)  # every 5 minutes by default

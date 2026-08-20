@@ -1,0 +1,10 @@
+# kdb+ generated data - runtime artifacts, not source
+tplogs/
+hdb/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
